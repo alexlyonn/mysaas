@@ -1,0 +1,202 @@
+import { NextRequest, NextResponse } from 'next/server';
+import Groq from 'groq-sdk';
+
+export async function POST(request: NextRequest) {
+  try {
+    // Check API key first
+    const apiKey = process.env.GROQ_API_KEY;
+    
+    if (!apiKey || apiKey === 'your_groq_api_key_here') {
+      return NextResponse.json(
+        { error: 'GROQ_API_KEY is not configured. Please add your real Groq API key to .env.local file and restart the server.' },
+        { status: 500 }
+      );
+    }
+
+    // Parse request body
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch (parseError) {
+      console.error('Invalid JSON in request body:', parseError);
+      return NextResponse.json(
+        { error: 'Invalid JSON in request body' },
+        { status: 400 }
+      );
+    }
+
+    const text = (body as { text?: unknown })?.text;
+
+    if (!text || typeof text !== 'string') {
+      return NextResponse.json(
+        { error: 'Text is required and must be a string' },
+        { status: 400 }
+      );
+    }
+
+    // Initialize Groq client
+    let groq;
+    try {
+      groq = new Groq({
+        apiKey: apiKey,
+      });
+    } catch (initError: unknown) {
+      const message = initError instanceof Error ? initError.message : 'Unknown initialization error';
+      console.error('Failed to initialize Groq client:', initError);
+      return NextResponse.json(
+        { 
+          error: 'Failed to initialize Groq client',
+          details: message
+        },
+        { status: 500 }
+      );
+    }
+
+    const prompt = `Analyze this landing page text and find the weakest headline and CTA. Provide 3 improvement suggestions. Return ONLY a valid JSON object with this exact structure:
+{
+  "critiques": ["critique 1", "critique 2", "critique 3"],
+  "headline_suggestion": "suggested headline",
+  "ab_test_suggestion": "A/B test suggestion",
+  "conversion_score": 7.5
+}
+
+Do not include any text outside the JSON. Return only the JSON object.
+
+Landing page text:
+${text}`;
+
+    // Call Groq API with error handling
+    let completion;
+    try {
+      completion = await groq.chat.completions.create({
+        model: 'llama-3.1-70b-specdec',
+
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a landing page analysis expert. You MUST respond with ONLY valid JSON. No explanations, no markdown, just pure JSON.',
+          },
+          {
+model: "llama-3.1-8b-instant",
+            role: 'user',
+            content: prompt,
+          },
+        ],
+        temperature: 0.7,
+        max_tokens: 1000,
+      });
+    } catch (groqError: unknown) {
+      console.error('Groq API error:', groqError);
+      const parseErrorDetails = (err: unknown): {
+        status?: number;
+        statusCode?: number;
+        statusText?: string;
+        message?: string;
+        code?: string;
+        name?: string;
+      } => {
+        if (!err || typeof err !== 'object') {
+          return {};
+        }
+
+        const errorObj = err as Record<string, unknown>;
+
+        return {
+          status: typeof errorObj.status === 'number' ? errorObj.status : undefined,
+          statusCode: typeof errorObj.statusCode === 'number' ? errorObj.statusCode : undefined,
+          statusText: typeof errorObj.statusText === 'string' ? errorObj.statusText : undefined,
+          message: typeof errorObj.message === 'string' ? errorObj.message : undefined,
+          code: typeof errorObj.code === 'string' ? errorObj.code : undefined,
+          name: typeof errorObj.name === 'string' ? errorObj.name : undefined,
+        };
+      };
+
+      const errorDetails = parseErrorDetails(groqError);
+      const statusCode = errorDetails.status ?? errorDetails.statusCode;
+      console.error('Error details:', errorDetails);
+      
+      // Handle specific Groq errors
+      if (statusCode === 401) {
+        return NextResponse.json(
+          { 
+            error: 'Invalid Groq API key. Please check: 1) API key is correct in .env.local, 2) No extra spaces, 3) Server was restarted after adding the key, 4) API key is from https://console.groq.com/keys',
+            details: 'Make sure your Groq API key is valid and you have restarted the dev server after adding it.'
+          },
+          { status: 500 }
+        );
+      }
+      
+      if (statusCode === 429) {
+        return NextResponse.json(
+          { error: 'Groq API rate limit exceeded. Please try again later.' },
+          { status: 429 }
+        );
+      }
+
+      return NextResponse.json(
+        { 
+          error: 'Failed to communicate with Groq API',
+          details: errorDetails.message || 'Unknown error',
+          status: statusCode,
+          code: errorDetails.code
+        },
+        { status: 500 }
+      );
+    }
+
+    const responseContent = completion.choices[0]?.message?.content;
+
+    if (!responseContent) {
+      return NextResponse.json(
+        { error: 'No response from Groq' },
+        { status: 500 }
+      );
+    }
+
+    // Clean response content (remove markdown code blocks if present)
+    let cleanedContent = responseContent.trim();
+    if (cleanedContent.startsWith('```json')) {
+      cleanedContent = cleanedContent.replace(/^```json\n?/, '').replace(/\n?```$/, '');
+    } else if (cleanedContent.startsWith('```')) {
+      cleanedContent = cleanedContent.replace(/^```\n?/, '').replace(/\n?```$/, '');
+    }
+    cleanedContent = cleanedContent.trim();
+
+    // Parse JSON response with error handling
+    let jsonResponse;
+    try {
+      jsonResponse = JSON.parse(cleanedContent);
+    } catch (parseError) {
+      console.error('Failed to parse Groq response:', parseError, cleanedContent);
+      return NextResponse.json(
+        { 
+          error: 'Invalid JSON response from Groq',
+          details: 'The AI model did not return valid JSON. Please try again.',
+          rawResponse: cleanedContent.substring(0, 200) // First 200 chars for debugging
+        },
+        { status: 500 }
+      );
+    }
+
+    // Validate response structure
+    if (!jsonResponse.critiques || !Array.isArray(jsonResponse.critiques)) {
+      return NextResponse.json(
+        { error: 'Invalid response format from Groq', response: jsonResponse },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json(jsonResponse);
+  } catch (error: unknown) {
+    console.error('Unexpected error in analyze route:', error);
+    const message = error instanceof Error ? error.message : 'An unexpected error occurred';
+    
+    return NextResponse.json(
+      { 
+        error: 'Internal server error',
+        message
+      },
+      { status: 500 }
+    );
+  }
+}
