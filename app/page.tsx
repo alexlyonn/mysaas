@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import LandingPageAnalyzer from './components/LandingPageAnalyzer';
+import LandingPageAnalyzer from './components/LandingPageAnalyzer'; // Bu import artık doğru dosyayı işaret ediyor.
 
 export default function Home() {
   const [selectedView, setSelectedView] = useState<'Dashboard' | 'Tools'>('Dashboard');
@@ -295,7 +295,7 @@ export default function Home() {
             </div>
           </>
         ) : (
-          <div className="p-8">
+          <div className="p-0 sm:p-4 lg:p-8">
             <LandingPageAnalyzer />
           </div>
         )}
