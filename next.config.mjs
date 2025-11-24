@@ -6,9 +6,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const nextConfig = {
-  turbopack: {
-    root: __dirname,
-  },
+  // turbopack ayarı genellikle CLI üzerinden yapılır.
 };
 
 export default nextConfig;
